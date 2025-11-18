@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>写真一括リネーム（RENAME_INDEX.csv 対応）</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- JSZip CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js" integrity="sha512-rjOcFKwgpDYtZ0P24bbOE54Hncm6Wt8r7PCo7QhGOTKRuFIs0s0q1S2pG8b+f8+TwG3ZK+RGQe2z9K1nK5CNA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 1.5rem;
+      line-height: 1.5;
+    }
+    h1 {
+      font-size: 1.4rem;
+      margin-bottom: 0.5rem;
+    }
+    #dropZone {
+      border: 2px dashed #888;
+      border-radius: 8px;
+      padding: 2rem;
+      text-align: center;
+      color: #555;
+      margin-bottom: 1rem;
+      transition: background-color 0.2s, border-color 0.2s;
+    }
+    #dropZone.dragover {
+      background-color: #f0f8ff;
+      border-color: #0078d4;
+      color: #0078d4;
+    }
+    #fileInput {
+      margin-top: 0.5rem;
+    }
+    #log {
+      font-size: 0.9rem;
+      white-space: pre-wrap;
+      background: #f7f7f7;
+      border-radius: 4px;
+      padding: 0.5rem;
+      max-height: 12rem;
+      overflow-y: auto;
+      margin-top: 0.5rem;
+    }
+    #resultTable {
+      border-collapse: collapse;
+      width: 100%;
+      margin-top: 1rem;
+      font-size: 0.9rem;
+    }
+    #resultTable th, #resultTable td {
+      border: 1px solid #ccc;
+      padding: 0.3rem 0.4rem;
+      text-align: left;
+    }
+    #resultTable th {
+      background-color: #f0f0f0;
+    }
+    .unmatched {
+      background-color: #fff4f4;
+    }
+    .matched {
+      background-color: #f5fff5;
+    }
+    .small {
+      font-size: 0.8rem;
+      color: #666;
+    }
+    button {
+      margin-top: 0.8rem;
+      padding: 0.4rem 0.8rem;
+      font-size: 0.9rem;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <h1>写真一括リネームツール（RENAME_INDEX.csv 対応）</h1>
+  <p class="small">
+    1. <code>RENAME_INDEX.csv</code> と JPG 画像をまとめてここにドラッグ＆ドロップ<br>
+    2. 変換一覧を確認してから ZIP をダウンロード<br>
+    ※ CSV は <code>A01,*,BR0020,...</code> のような行から <code>BR0020</code> などのコードを拾います。<br>
+    ※ 画像名の末尾の数字と、コードの末尾の数字（例：0020）を突き合わせてリネームします。
+  </p>
+
+  <div id="dropZone">
+    <strong>ここに RENAME_INDEX.csv と JPG をドラッグ＆ドロップ</strong><br>
+    または <input type="file" id="fileInput" multiple accept=".csv,.jpg,.jpeg,.png" />
+  </div>
+
+  <div>
+    <button id="downloadZipBtn" disabled>ZIP をダウンロード</button>
+  </div>
+
+  <div id="log"></div>
+
+  <table id="resultTable" style="display:none;">
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>元ファイル名</th>
+        <th>新ファイル名</th>
+        <th>対応したコード</th>
+        <th>備考</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <script>
+    const dropZone = document.getElementById("dropZone");
+    const fileInput = document.getElementById("fileInput");
+    const logEl = document.getElementById("log");
+    const resultTable = document.getElementById("resultTable");
+    const resultTbody = resultTable.querySelector("tbody");
+    const downloadBtn = document.getElementById("downloadZipBtn");
+
+    let lastResult = null; // { entries: [...], csvInfo: ..., mapping: Map }
+
+    function log(msg) {
+      logEl.textContent += msg + "\n";
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function clearLog() {
+      logEl.textContent = "";
+    }
+
+    function onDragOver(e) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+      dropZone.classList.add("dragover");
+    }
+
+    function onDragLeave(e) {
+      e.preventDefault();
+      dropZone.classList.remove("dragover");
+    }
+
+    function onDrop(e) {
+      e.preventDefault();
+      dropZone.classList.remove("dragover");
+      const files = Array.from(e.dataTransfer.files || []);
+      handleFiles(files);
+    }
+
+    fileInput.addEventListener("change", (e) => {
+      const files = Array.from(e.target.files || []);
+      handleFiles(files);
+    });
+
+    dropZone.addEventListener("dragover", onDragOver);
+    dropZone.addEventListener("dragleave", onDragLeave);
+    dropZone.addEventListener("drop", onDrop);
+
+    async function handleFiles(files) {
+      clearLog();
+      resultTbody.innerHTML = "";
+      resultTable.style.display = "none";
+      downloadBtn.disabled = true;
+      lastResult = null;
+
+      if (!files.length) {
+        log("ファイルが選択されていません。");
+        return;
+      }
+
+      const csvFiles = files.filter(f => f.name.toLowerCase().endsWith(".csv"));
+      const imageFiles = files.filter(f => /\.(jpe?g|png)$/i.test(f.name));
+
+      if (!csvFiles.length) {
+        log("CSV ファイル（RENAME_INDEX.csv）が見つかりません。");
+        return;
+      }
+      if (!imageFiles.length) {
+        log("画像ファイル（.jpg / .jpeg / .png）が見つかりません。");
+        return;
+      }
+
+      const csvFile = csvFiles[0];
+      log(`CSV: ${csvFile.name} を使用します（複数ある場合は最初の1つ）。`);
+      log(`画像ファイル数: ${imageFiles.length} 枚`);
+
+      try {
+        const csvText = await csvFile.text(); // Shift-JIS でもカンマと英数字はそのまま扱える前提
+        const mapping = parseRenameIndexCsv(csvText);
+        log(`CSV からコードを ${mapping.size} 個取得しました。`);
+
+        const result = matchImagesWithMapping(imageFiles, mapping);
+        renderResult(result);
+        lastResult = { entries: result.entries, mapping, csvInfo: { csvName: csvFile.name } };
+        downloadBtn.disabled = false;
+      } catch (err) {
+        console.error(err);
+        log("エラー: " + err.message);
+      }
+    }
+
+    /**
+     * RENAME_INDEX.csv をパースして
+     *   key: 数字 (例: 20)
+     *   val: コード文字列 (例: "BR0020")
+     * の Map を返す
+     */
+    function parseRenameIndexCsv(text) {
+      const mapping = new Map();
+
+      const lines = text.split(/\r?\n/);
+      for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (!line) continue;
+
+        // A01 行だけ見る（例: A01,2295,BR0020,-26450.296,-4324.762,,
+        if (!line.startsWith("A01,")) continue;
+
+        const cols = line.split(",");
+        if (cols.length < 3) continue;
+
+        const code = (cols[2] || "").trim();
+        if (!code) continue;
+        if (code.toLowerCase() === "x") continue;
+
+        // コード末尾の数字を取る (BR0020 → 0020)
+        const m = code.match(/(\d+)$/);
+        if (!m) continue;
+
+        const numStr = m[1];
+        const num = parseInt(numStr, 10);
+        if (Number.isNaN(num)) continue;
+
+        // 同じ番号が複数あったら上書き（最後を優先）
+        mapping.set(num, code);
+      }
+
+      return mapping;
+    }
+
+    /**
+     * 画像ファイル名の末尾の数字と mapping を突き合わせて
+     * リネーム結果を返す
+     */
+    function matchImagesWithMapping(imageFiles, mapping) {
+      const entries = [];
+      let idx = 1;
+
+      for (const file of imageFiles) {
+        const originalName = file.name;
+        const extMatch = originalName.match(/(\.[^.]+)$/);
+        const ext = extMatch ? extMatch[1] : "";
+        const base = originalName.replace(/(\.[^.]+)$/, "");
+
+        // ファイル名末尾の連続数字を拾う (例: "0020" / "0117_1" → "1" / "0035A150" → "150" など)
+        const numMatch = base.match(/(\d+)$/);
+        let note = "";
+        let newName = originalName;
+        let matchedCode = null;
+        let matched = false;
+
+        if (!numMatch) {
+          note = "末尾に数字がないためマッチ不可";
+        } else {
+          const num = parseInt(numMatch[1], 10);
+          if (mapping.has(num)) {
+            matchedCode = mapping.get(num);
+            newName = matchedCode + ext.toLowerCase();
+            matched = true;
+            note = "";
+          } else {
+            note = `CSV に番号 ${num} のコードなし`;
+          }
+        }
+
+        entries.push({
+          index: idx++,
+          originalName,
+          newName,
+          file,
+          matched,
+          matchedCode,
+          note
+        });
+      }
+
+      return { entries };
+    }
+
+    function renderResult(result) {
+      resultTbody.innerHTML = "";
+      let matchedCount = 0;
+      let unmatchedCount = 0;
+
+      for (const e of result.entries) {
+        const tr = document.createElement("tr");
+        tr.className = e.matched ? "matched" : "unmatched";
+
+        if (e.matched) matchedCount++;
+        else unmatchedCount++;
+
+        const cols = [
+          e.index,
+          e.originalName,
+          e.newName,
+          e.matchedCode || "",
+          e.note || (e.matched ? "OK" : "")
+        ];
+
+        for (const c of cols) {
+          const td = document.createElement("td");
+          td.textContent = c;
+          tr.appendChild(td);
+        }
+        resultTbody.appendChild(tr);
+      }
+
+      resultTable.style.display = "table";
+
+      log(`マッチした画像: ${matchedCount} 枚`);
+      log(`マッチしなかった画像: ${unmatchedCount} 枚（表のピンク行）`);
+    }
+
+    downloadBtn.addEventListener("click", async () => {
+      if (!lastResult || !lastResult.entries || !lastResult.entries.length) {
+        alert("変換結果がありません。先に CSV と画像を読み込んでください。");
+        return;
+      }
+
+      const zip = new JSZip();
+      let added = 0;
+
+      for (const e of lastResult.entries) {
+        // マッチしたものだけ ZIP に入れる。必要なら unmatched も入れてもよい。
+        if (!e.matched) continue;
+        zip.file(e.newName, e.file);
+        added++;
+      }
+
+      if (!added) {
+        alert("ZIP に追加するファイルがありません（マッチした画像がありません）。");
+        return;
+      }
+
+      log(`ZIP を作成中...（${added} ファイル）`);
+
+      try {
+        const blob = await zip.generateAsync({ type: "blob" });
+        const a = document.createElement("a");
+        const url = URL.createObjectURL(blob);
+        a.href = url;
+        a.download = "renamed_photos.zip";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        log("ZIP ダウンロード完了。");
+      } catch (err) {
+        console.error(err);
+        alert("ZIP の作成でエラーが発生しました: " + err.message);
+      }
+    });
+  </script>
+</body>
+</html>
