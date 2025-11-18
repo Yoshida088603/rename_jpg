@@ -244,8 +244,22 @@
         const ext = extMatch ? extMatch[1] : "";
         const base = originalName.replace(/(\.[^.]+)$/, "");
 
-        // 末尾の連続数字 (例: "0020" / "0117_1" → "1" / "0035A150" → "150")
-        const numMatch = base.match(/(\d+)$/);
+        // ベース名とサフィックス（_1, _2 など）を分離
+        // 例:
+        //   0054_1  → mainPart="0054", suffix="_1"
+        //   0063_2  → mainPart="0063", suffix="_2"
+        //   0103    → mainPart="0103", suffix=""
+        let mainPart = base;
+        let suffix = "";
+
+        const mUnderscore = base.match(/^(\d+)_([0-9A-Za-z]+)$/);
+        if (mUnderscore) {
+          mainPart = mUnderscore[1];      // "_" より前
+          suffix   = "_" + mUnderscore[2]; // "_" 以降
+        }
+
+        // マッチ用の番号は mainPart の末尾数字
+        const numMatch = mainPart.match(/(\d+)$/);
         let note = "";
         let newName = originalName;
         let matchedCode = null;
@@ -257,7 +271,8 @@
           const num = parseInt(numMatch[1], 10);
           if (mapping.has(num)) {
             matchedCode = mapping.get(num);
-            newName = matchedCode + ext.toLowerCase();
+            // コード + （_1 等のサフィックス） + 拡張子
+            newName = matchedCode + suffix + ext.toLowerCase();
             matched = true;
           } else {
             note = `CSV に番号 ${num} のコードなし`;
