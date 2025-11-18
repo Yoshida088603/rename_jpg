@@ -4,8 +4,10 @@
   <meta charset="UTF-8" />
   <title>写真一括リネーム（RENAME_INDEX.csv 対応）</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <!-- JSZip CDN -->
- <script src="https://unpkg.com/jszip@3.10.1/dist/jszip.min.js"></script>
+
+  <!-- JSZip（unpkg 版。integrity なし） -->
+  <script src="https://unpkg.com/jszip@3.10.1/dist/jszip.min.js"></script>
+
   <style>
     body {
       font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -183,7 +185,7 @@
       log(`画像ファイル数: ${imageFiles.length} 枚`);
 
       try {
-        const csvText = await csvFile.text(); // Shift-JIS でもカンマと英数字はそのまま扱える前提
+        const csvText = await csvFile.text(); // Shift-JIS でもカンマと英数字はこの用途なら問題なし前提
         const mapping = parseRenameIndexCsv(csvText);
         log(`CSV からコードを ${mapping.size} 個取得しました。`);
 
@@ -197,12 +199,7 @@
       }
     }
 
-    /**
-     * RENAME_INDEX.csv をパースして
-     *   key: 数字 (例: 20)
-     *   val: コード文字列 (例: "BR0020")
-     * の Map を返す
-     */
+    // RENAME_INDEX.csv → Map<number, code>
     function parseRenameIndexCsv(text) {
       const mapping = new Map();
 
@@ -236,10 +233,7 @@
       return mapping;
     }
 
-    /**
-     * 画像ファイル名の末尾の数字と mapping を突き合わせて
-     * リネーム結果を返す
-     */
+    // 画像ファイル名の末尾の数字と mapping を突き合わせる
     function matchImagesWithMapping(imageFiles, mapping) {
       const entries = [];
       let idx = 1;
@@ -250,7 +244,7 @@
         const ext = extMatch ? extMatch[1] : "";
         const base = originalName.replace(/(\.[^.]+)$/, "");
 
-        // ファイル名末尾の連続数字を拾う (例: "0020" / "0117_1" → "1" / "0035A150" → "150" など)
+        // 末尾の連続数字 (例: "0020" / "0117_1" → "1" / "0035A150" → "150")
         const numMatch = base.match(/(\d+)$/);
         let note = "";
         let newName = originalName;
@@ -265,7 +259,6 @@
             matchedCode = mapping.get(num);
             newName = matchedCode + ext.toLowerCase();
             matched = true;
-            note = "";
           } else {
             note = `CSV に番号 ${num} のコードなし`;
           }
@@ -329,7 +322,7 @@
       let added = 0;
 
       for (const e of lastResult.entries) {
-        // マッチしたものだけ ZIP に入れる。必要なら unmatched も入れてもよい。
+        // マッチしたものだけ ZIP に入れる
         if (!e.matched) continue;
         zip.file(e.newName, e.file);
         added++;
