@@ -2,6 +2,8 @@
 
 GitHub Pages 上で動作する、ブラウザ完結型の写真一括リネームツールです。
 
+https://yoshida088603.github.io/rename_jpg/
+
 - `RENAME_INDEX.csv` と JPG/PNG 画像ファイルを  
   **ブラウザにドラッグ＆ドロップ** するだけで、
 - CSV に記載されたコードにしたがって
